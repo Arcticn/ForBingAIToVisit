@@ -1,303 +1,255 @@
-# 反四子棋程序 by Bing
-# 使用Python 3.9.7编写
-# 使用蒙特卡罗树搜索算法来决定电脑的落子
-# 使用命令行界面来交互
-# 棋盘大小为11*11，用0代表空位，用1代表人类棋手，用2代表电脑棋手
-# 每次输入X Y来落子，XY之间空一格，X和Y都是从0到10的整数
-# 如果在水平、垂直或者对角线上连成四个自己的棋子，则输掉游戏
+# -*- coding: utf-8 -*-
+# This is a program for playing reverse connect four with human
+# Reverse connect four is a variant of connect four where the goal is to make the opponent connect four pieces
+# The program uses Monte Carlo tree search algorithm to select the best move and alpha-beta pruning algorithm to evaluate the board state
+# The program uses json module to handle input and output, numpy module to represent the board matrix, random module to generate random numbers
+# The program uses time module to control the time limit for each move
+# The program can adapt to different first-hand situations by checking the first request
 
+import json
+import numpy as np
 import random
-import math
+import time
 
-# 定义棋盘类
-class Board:
-    # 初始化棋盘
-    def __init__(self):
-        self.size = 11 # 棋盘大小
-        self.grid = [[0 for _ in range(self.size)] for _ in range(self.size)] # 棋盘矩阵
-        self.winner = None # 胜者，None表示还没有胜者
+# Define some constants
+BOARD_SIZE = 11 # The size of the board
+EMPTY = 0 # The value for empty cell
+HUMAN = 1 # The value for human player
+COMPUTER = 2 # The value for computer player
+WIN = 1 # The value for win state
+LOSE = -1 # The value for lose state
+DRAW = 0 # The value for draw state
+TIME_LIMIT = 5.5 # The time limit for each move in seconds
 
-    # 打印棋盘
-    def print(self):
-        print("  ", end="")
-        for i in range(self.size):
-            print(i, end=" ")
-        print()
-        for i in range(self.size):
-            print(i, end=" ")
-            for j in range(self.size):
-                if self.grid[i][j] == 0:
-                    print(".", end=" ")
-                elif self.grid[i][j] == 1:
-                    print("X", end=" ")
-                elif self.grid[i][j] == 2:
-                    print("O", end=" ")
-            print()
-
-    # 判断是否有四连珠，如果有则返回输掉的玩家，如果没有则返回None
-    def check_four(self):
-        # 检查水平方向
-        for i in range(self.size):
-            for j in range(self.size - 3):
-                if self.grid[i][j] != 0 and self.grid[i][j] == self.grid[i][j+1] == self.grid[i][j+2] == self.grid[i][j+3]:
-                    return self.grid[i][j]
-        # 检查垂直方向
-        for i in range(self.size - 3):
-            for j in range(self.size):
-                if self.grid[i][j] != 0 and self.grid[i][j] == self.grid[i+1][j] == self.grid[i+2][j] == self.grid[i+3][j]:
-                    return self.grid[i][j]
-        # 检查正对角线方向
-        for i in range(self.size - 3):
-            for j in range(self.size - 3):
-                if self.grid[i][j] != 0 and self.grid[i][j] == self.grid[i+1][j+1] == self.grid[i+2][j+2] == self.grid[i+3][j+3]:
-                    return self.grid[i][j]
-        # 检查反对角线方向
-        for i in range(3, self.size):
-            for j in range(self.size - 3):
-                if self.grid[i][j] != 0 and self.grid[i][j] == self.grid[i-1][j+1] == self.grid[i-2][j+2] == self.grid[i-3][j+3]:
-                    return self.grid[i][j]
-        # 如果都没有四连珠，则返回None
-        return None
-
-    # 判断棋盘是否已满，如果已满则返回True，如果还有空位则返回False
-    def is_full(self):
-        for i in range(self.size):
-            for j in range(self.size):
-                if self.grid[i][j] == 0:
-                    return False
-        return True
-
-    # 落子，如果成功则返回True，如果失败则返回False
-    def move(self, x, y, player):
-        # 判断坐标是否合法
-        if x < 0 or x >= self.size or y < 0 or y >= self.size:
-            return False
-        # 判断位置是否为空
-        if self.grid[x][y] != 0:
-            return False
-        # 落子
-        self.grid[x][y] = player
-        # 判断是否有四连珠，如果有则更新胜者
-        self.winner = self.check_four()
-        # 返回成功
-        return True
-
-    # 撤销落子，如果成功则返回True，如果失败则返回False
-    def undo(self, x, y):
-        # 判断坐标是否合法
-        if x < 0 or x >= self.size or y < 0 or y >= self.size:
-            return False
-        # 判断位置是否非空
-        if self.grid[x][y] == 0:
-            return False
-        # 撤销落子
-        self.grid[x][y] = 0
-        # 更新胜者为None
-        self.winner = None
-        # 返回成功
-        return True
-
-    # 复制棋盘，返回一个新的棋盘对象
-    def copy(self):
-        new_board = Board()
-        for i in range(self.size):
-            for j in range(self.size):
-                new_board.grid[i][j] = self.grid[i][j]
-        new_board.winner = self.winner
-        return new_board
-
-# 定义蒙特卡罗树搜索节点类
+# Define a class for nodes in the Monte Carlo tree search
 class Node:
-    # 初始化节点
-    def __init__(self, board, parent, move):
-        self.board = board # 节点对应的棋盘状态
-        self.parent = parent # 父节点
-        self.move = move # 从父节点到当前节点的落子位置，用(x,y)表示，如果是根节点则为None
-        self.children = [] # 子节点列表
-        self.visits = 0 # 访问次数
-        self.wins = 0 # 获胜次数
+    def __init__(self, board, parent=None, move=None):
+        self.board = board # The board state of this node
+        self.parent = parent # The parent node of this node
+        self.move = move # The move that leads to this node from the parent node
+        self.children = [] # The list of child nodes of this node
+        self.visits = 0 # The number of visits of this node
+        self.value = 0 # The total value of this node
 
-    # 扩展子节点，返回一个新的子节点对象，如果没有可扩展的子节点则返回None
+    def is_leaf(self):
+        # Return True if this node is a leaf node (no children)
+        return len(self.children) == 0
+
+    def is_root(self):
+        # Return True if this node is a root node (no parent)
+        return self.parent is None
+
     def expand(self):
-        moves = [] # 可扩展的落子位置列表
-        for i in range(self.board.size):
-            for j in range(self.board.size):
-                if self.board.grid[i][j] == 0: # 如果位置为空，则可以扩展
-                    moves.append((i,j))
-        if len(moves) == 0: # 如果没有可扩展的落子位置，则返回None
-            return None
-        move = random.choice(moves) # 随机选择一个落子位置
-        new_board = self.board.copy() # 复制当前棋盘状态
-        # 根据当前节点是谁的回合来决定落子的玩家，1表示人类，2表示电脑
-        player = 2 if len(self.children) % 2 == 0 else 1
-        # 在新的棋盘上落子
-        new_board.move(move[0], move[1], player)
-        # 创建一个新的子节点
-        new_node = Node(new_board, self, move)
-        # 将新的子节点加入到当前节点的子节点列表中
-        self.children.append(new_node)
-        # 返回新的子节点
-        return new_node
+        # Expand this node by generating all possible child nodes
+        moves = get_valid_moves(self.board) # Get all valid moves for this node's board state
+        for move in moves:
+            child_board = make_move(self.board, move) # Make a move and get the new board state
+            child_node = Node(child_board, self, move) # Create a new child node with the new board state, the current node as parent and the move as move
+            self.children.append(child_node) # Add the child node to the list of children
 
-    # 模拟随机对局，返回输掉的玩家，如果平局则返回0
-    def simulate(self):
-        # 复制当前棋盘状态
-        board = self.board.copy()
-        # 根据当前节点是谁的回合来决定下一个落子的玩家，1表示人类，2表示电脑
-        player = 1 if len(self.children) % 2 == 0 else 2
-        # 循环直到游戏结束
-        while True:
-            # 如果棋盘已满，则平局，返回0
-            if board.is_full():
-                return 0
-            # 随机选择一个空位落子
-            moves = [] # 空位列表
-            for i in range(board.size):
-                for j in range(board.size):
-                    if board.grid[i][j] == 0: # 如果位置为空，则加入列表
-                        moves.append((i,j))
-            move = random.choice(moves) # 随机选择一个空位
-            board.move(move[0], move[1], player) # 落子
-            # 如果有四连珠，则游戏结束，返回输掉的玩家
-            loser = board.check_four()
-            if loser is not None:
-                return loser
-            # 切换玩家
-            player = 1 if player == 2 else 2
+    def select(self):
+        # Select a child node with the highest UCB1 value
+        best_value = -float('inf') # Initialize the best value as negative infinity
+        best_child = None # Initialize the best child as None
+        for child in self.children: # For each child node
+            ucb1_value = child.get_ucb1_value() # Calculate the UCB1 value of the child node
+            if ucb1_value > best_value: # If the UCB1 value is better than the best value so far
+                best_value = ucb1_value # Update the best value
+                best_child = child # Update the best child
+        return best_child # Return the best child
 
-    # 回溯更新访问次数和获胜次数，如果当前节点是输掉的玩家的回合，则增加获胜次数，否则不变
-    def backpropagate(self, loser):
-        # 更新当前节点的访问次数
-        self.visits += 1
-        # 根据当前节点是谁的回合来决定是否增加获胜次数，1表示人类，2表示电脑
-        player = 2 if len(self.children) % 2 == 0 else 1
-        if player != loser: # 如果当前节点不是输掉的玩家的回合，则增加获胜次数
-            self.wins += 1
-        # 如果有父节点，则递归回溯更新父节点
-        if self.parent is not None:
-            self.parent.backpropagate(loser)
+    def update(self, result):
+        # Update this node's visits and value with the given result (win, lose or draw)
+        self.visits += 1 # Increment the visits by one
+        self.value += result # Add the result to the value
 
-    # 判断节点对应的棋盘是否已满，如果已满则返回True，如果还有空位则返回False
-    def is_full(self):
-        return self.board.is_full()
+    def get_ucb1_value(self):
+        # Calculate and return the UCB1 value of this node
+        c = np.sqrt(2) # Define a constant c as square root of 2 (can be tuned)
+        exploitation_term = self.value / self.visits if self.visits > 0 else 0 # Calculate the exploitation term as the average value of this node if it has been visited, otherwise zero
+        exploration_term = c * np.sqrt(np.log(self.parent.visits) / self.visits) if self.visits > 0 else float('inf') # Calculate the exploration term as c times square root of log of
+        # the number of visits of this node over the number of visits of this node if it has been visited, otherwise infinity
+        ucb1_value = exploitation_term + exploration_term # Calculate the UCB1 value as the sum of exploitation term and exploration term
+        return ucb1_value # Return the UCB1 value
 
-# 定义蒙特卡罗树搜索类
-class MCTS:
-    # 初始化搜索树，传入初始棋盘状态和搜索时间限制（秒）
-    def __init__(self, board, time_limit):
-        self.root = Node(board, None, None) # 根节点
-        self.time_limit = time_limit # 时间限制
+# Define a function to get the board state after making a move
+def make_move(board, move):
+    new_board = board.copy() # Make a copy of the board
+    x, y = move['x'], move['y'] # Get the x and y coordinates of the move
+    new_board[x][y] = get_current_player(board) # Set the cell at (x, y) to the current player's value
+    return new_board # Return the new board
 
-    # 搜索最佳落子位置，返回一个(x,y)元组，如果没有可行的落子位置则返回None
-    def search(self):
-        import time
-        start_time = time.time() # 记录开始时间
-        while time.time() - start_time < self.time_limit: # 循环直到超过时间限制
-            node = self.root # 从根节点开始选择节点
-            while True: # 循环直到找到一个可扩展或者可模拟的节点为止
-                if node.board.winner is not None: # 如果当前节点对应的棋盘状态
-                # 已经有胜者，则无法扩展或者模拟，直接回溯更新
-                    node.backpropagate(node.board.winner)
-                    break
-                elif node.is_full(): # 如果当前节点对应的棋盘状态已满，则平局，也无法扩展或者模拟，直接回溯更新
-                    node.backpropagate(0)
-                    break
-                elif len(node.children) == 0: # 如果当前节点没有子节点，则尝试扩展一个子节点
-                    new_node = node.expand()
-                    if new_node is None: # 如果无法扩展，则平局，回溯更新
-                        node.backpropagate(0)
-                        break
-                    else: # 如果成功扩展，则模拟随机对局，回溯更新
-                        loser = new_node.simulate()
-                        new_node.backpropagate(loser)
-                        break
-                else: # 如果当前节点有子节点，则根据UCB1公式选择一个最优的子节点继续选择
-                    best_score = -1 # 最优的分数
-                    best_child = None # 最优的子节点
-                    for child in node.children: # 遍历所有子节点
-                        # 计算UCB1分数，其中C为常数，这里取1.414，w为获胜次数，n为访问次数，N为父节点的访问次数
-                        score = child.wins / child.visits + 1.414 * math.sqrt(math.log(node.visits) / child.visits)
-                        if score > best_score: # 如果分数更高，则更新最优的分数和最优的子节点
-                            best_score = score
-                            best_child = child
-                    node = best_child # 选择最优的子节点继续选择
+# Define a function to get the current player's value based on the board state
+def get_current_player(board):
+    count_human = np.count_nonzero(board == HUMAN) # Count the number of human pieces on the board
+    count_computer = np.count_nonzero(board == COMPUTER) # Count the number of computer pieces on the board
+    if count_human == count_computer: # If the number of human pieces is equal to the number of computer pieces
+        return COMPUTER # The current player is computer
+    else: # Otherwise
+        return HUMAN # The current player is human
 
-        # 在时间限制内完成了若干次选择-扩展-模拟-回溯的过程后，从根节点的子节点中选择访问次数最多的子节点作为最佳落子位置
-        best_move = None # 最佳落子位置
-        best_visits = -1 # 最多访问次数
-        for child in self.root.children: # 遍历根节点的所有子节点
-            if child.visits > best_visits: # 如果访问次数更多，则更新最佳落子位置和最多访问次数
-                best_move = child.move
-                best_visits = child.visits
-        return best_move # 返回最佳落子位置
+# Define a function to get all valid moves for a given board state
+def get_valid_moves(board):
+    valid_moves = [] # Initialize an empty list for valid moves
+    for i in range(BOARD_SIZE): # For each row index
+        for j in range(BOARD_SIZE): # For each column index
+            if board[i][j] == EMPTY: # If the cell at (i, j) is empty
+                valid_move = {'x': i, 'y': j} # Create a valid move with x and y coordinates
+                valid_moves.append(valid_move) # Add the valid move to the list
+    return valid_moves # Return the list of valid moves
 
-# 定义游戏类
-class Game:
-    # 初始化游戏，传入搜索时间限制（秒）
-    def __init__(self, time_limit):
-        self.board = Board() # 棋盘对象
-        self.time_limit = time_limit # 搜索时间限制
+# Define a function to check if a given board state is terminal (win, lose or draw)
+def is_terminal(board):
+    return get_board_value(board) != None # Return True if the board value is not None, otherwise False
 
-    # 开始游戏，循环直到游戏结束
-    def start(self):
-        print("欢迎来到反四子棋！")
-        print("你是X，电脑是O。")
-        print("每次输入X Y来落子，XY之间空一格，X和Y都是从0到10的整数。")
-        print("如果在水平、垂直或者对角线上连成四个自己的棋子，则输掉游戏。")
-        print("祝你好运！")
-        self.board.print() # 打印初始棋盘
+# Define a function to get the board value (win, lose or draw) for a given board state
+def get_board_value(board):
+    for i in range(BOARD_SIZE): # For each row index
+        for j in range(BOARD_SIZE): # For each column index
+            if board[i][j] != EMPTY: # If the cell at (i, j) is not empty
+                player = board[i][j] # Get the player's value at that cell
+                if check_win(board, player, i, j): # If the player wins by placing a piece at that cell
+                    return -WIN if player == COMPUTER else WIN # Return -WIN if the player is computer (bad for computer), otherwise WIN (good for computer)
+    if np.count_nonzero(board == EMPTY) == 0: # If there are no empty cells on the board
+        return DRAW # Return DRAW (neutral for computer)
+    return None # Return None (not terminal)
 
-        while True: # 循环直到游戏结束
+# Define a function to check if a given player wins by placing a piece at a given cell on a given board state
+def check_win(board, player, x, y):
+    directions = [(0, 1), (1, 0), (1, 1), (1, -1)] # Define four directions to check: horizontal, vertical, diagonal and anti-diagonal
+    for dx, dy in directions: # For each direction
+        count = 1 # Initialize the count as one (the piece itself)
+        for k in range(1, 4): # For each offset from 1 to 3
+            i = x + k * dx # Calculate the row index of the adjacent cell in that direction with that offset
+            j = y + k * dy # Calculate the column index of the adjacent cell in that direction with that offset
+            if 0 <= i < BOARD_SIZE and 0 <= j < BOARD_SIZE and board[i][j] == player: # If the adjacent cell is within the board and has the same player's value
+                count += 1 # Increment the count by one
+            else: # Otherwise
+                break # Break out of the loop
+        for k in range(1, 4): # For each offset from 1 to 3
+            i = x - k * dx # Calculate the row index of the adjacent cell in the opposite direction with that offset
+            j = y - k * dy # Calculate the column index of the adjacent cell in the opposite direction with that offset
+            if 0 <= i < BOARD_SIZE and 0 <= j < BOARD_SIZE and board[i][j] == player: # If the adjacent cell is within the board and has the same player's value
+                count += 1 # Increment the count by one
+            else: # Otherwise
+                break # Break out of the loop
+        if count >= 4: # If the count is at least four
+            return True # Return True (the player wins)
+    return False # Return False (the player does not win)
 
-            # 人类回合
-            while True: # 循环直到输入合法的落子位置为止
-                try: # 尝试获取输入并转换为整数坐标
-                    x, y = map(int, input("请输入你的落子位置：").split())
-                except ValueError: # 如果输入不合法，则```
-                    print("输入不合法，请重新输入。")
-                    continue
-                if self.board.move(x, y, 1): # 如果落子成功，则跳出循环
-                    break
-                else: # 如果落子失败，则提示并继续循环
-                    print("落子位置不合法，请重新输入。")
+# Define a function to perform the Monte Carlo tree search and return the best move
+def mcts(board):
+    root = Node(board) # Create a root node with the given board state
+    start_time = time.time() # Record the start time of the search
+    while time.time() - start_time < TIME_LIMIT: # While the time limit is not exceeded
+        node = root # Initialize the node as the root node
+        while not node.is_leaf(): # While the node is not a leaf node
+            node = node.select() # Select a child node with the highest UCB1 value
+        if not is_terminal(node.board): # If the node's board state is not terminal
+            node.expand() # Expand the node by generating all possible child nodes
+        result = rollout(node.board) # Perform a random rollout from the node's board state and get the result (win, lose or draw)
+        while node is not None: # While the node is not None
+            node.update(result) # Update the node's visits and value with the result
+            node = node.parent # Move to the parent node
+    best_move = get_best_move(root) # Get the best move from the root node's children based on the most visits
+    return best_move # Return the best move
 
-            self.board.print() # 打印棋盘
+# Define a function to perform a random rollout from a given board state and return the result (win, lose or draw)
+def rollout(board):
+    current_board = board.copy() # Make a copy of the board state
+    while not is_terminal(current_board): # While the board state is not terminal
+        moves = get_valid_moves(current_board) # Get all valid moves for the board state
+        random_move = random.choice(moves) # Choose a random move from the list of valid moves
+        current_board = make_move(current_board, random_move) # Make a random move and get the new board state
+    return get_board_value(current_board) # Return the board value (win, lose or draw) for the final board state
 
-            # 判断是否有胜者，如果有则结束游戏
-            if self.board.winner is not None:
-                if self.board.winner == 1:
-                    print("你输了！")
-                elif self.board.winner == 2:
-                    print("你赢了！")
-                break
+# Define a function to get the best move from a list of nodes based on the most visits
+def get_best_move(nodes):
+    most_visits = -float('inf') # Initialize the most visits as negative infinity
+    best_move = None # Initialize the best move as None
+    for node in nodes: # For each node in the list of nodes
+        if node.visits > most_visits: # If the node's visits is more than the most visits so far
+            most_visits = node.visits # Update the most visits
+            best_move = node.move # Update the best move
+    return best_move # Return the best move
 
-            # 判断是否平局，如果是则结束游戏
-            if self.board.is_full():
-                print("平局！")
-                break
+# Define a function to evaluate a board state using alpha-beta pruning algorithm and return a score (the higher, the better for computer)
+def evaluate(board, depth, alpha, beta):
+    if is_terminal(board): # If the board state is terminal
+        return get_board_value(board) * (BOARD_SIZE ** 2 + 1 - depth) # Return the board value (win, lose or draw) times a weight based on the depth (the earlier, the better)
+    if depth == 0: # If the depth limit is reached
+        return 0 # Return zero (unknown)
+    moves = get_valid_moves(board) # Get all valid moves for the board state
+    if get_current_player(board) == COMPUTER: # If the current player is computer
+        best_score = -float('inf') # Initialize the best score as negative infinity
+        for move in moves: # For each move in the list of valid moves
+            new_board = make_move(board, move) # Make a move and get the new board state
+            score = evaluate(new_board, depth - 1, alpha, beta) # Recursively evaluate the new board state with a smaller depth and the same alpha and beta values
+            best_score = max(best_score, score) # Update the best score with the maximum of the current best score and the new score
+            alpha = max(alpha, best_score) # Update alpha with the maximum of the current alpha and the best score
+            if beta <= alpha: # If beta is smaller than or equal to alpha
+                break # Break out of the loop (beta cut-off)
+        return best_score # Return the best score
+    else: # If the current player is human
+        best_score = float('inf') # Initialize the best score as positive infinity
+        for move in moves: # For each move in the list of valid moves
+            new_board = make_move(board, move) # Make a move and get the new board state
+            score = evaluate(new_board, depth - 1, alpha, beta) # Recursively evaluate the new board state with a smaller depth and the same alpha and beta values
+            best_score = min(best_score, score) # Update the best score with the minimum of the current best score and the new score
+            beta = min(beta, best_score) # Update beta with the minimum of the current beta and the best score
+            if beta <= alpha: # If beta is smaller than or equal to alpha
+                break # Break out of the loop (alpha cut-off)
+        return best_score # Return the best score
 
-            # 电脑回合
-            print("电脑正在思考中...")
-            mcts = MCTS(self.board, self.time_limit) # 创建蒙特卡罗树搜索对象
-            x, y = mcts.search() # 搜索最佳落子位置
-            self.board.move(x, y, 2) # 落子
-            print(f"电脑落子在{x} {y}")
-            self.board.print() # 打印棋盘
+# Define a function to print a board state in a human-readable way
+def print_board(board):
+    print('  ', end='') # Print two spaces at the beginning of each row
+    for j in range(BOARD_SIZE): # For each column index
+        print(j, end=' ') # Print the column index with a space
+    print() # Print a new line at the end of each row
+    for i in range(BOARD_SIZE): # For each row index
+        print(i, end=' ') # Print the row index with a space
+        for j in range(BOARD_SIZE): # For each column index
+            if board[i][j] == EMPTY: # If the cell at (i, j) is empty
+                print('.', end=' ') # Print a dot with a space
+            elif board[i][j] == HUMAN: # If the cell at (i, j) is human
+                print('O', end=' ') # Print an O with a space
+            elif board[i][j] == COMPUTER: # If the cell at (i, j) is computer
+                print('X', end=' ') # Print an X with a space
+        print() # Print a new line at the end of each row
 
-            # 判断是否有胜者，如果有则结束游戏
-            if self.board.winner is not None:
-                if self.board.winner == 1:
-                    print("你输了！")
-                elif self.board.winner == 2:
-                    print("你赢了！")
-                break
+# Define a function to get the initial board state
+def get_initial_board():
+    board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=int) # Create a board matrix filled with zeros
+    return board # Return the board matrix
 
-            # 判断是否平局，如果是则结束游戏
-            if self.board.is_full():
-                print("平局！")
-                break
+# Define a function to get the board state from the history of requests and responses
+def get_board_from_history(requests, responses):
+    board = get_initial_board() # Get the initial board state
+    for i in range(len(requests)): # For each index in the history
+        request = requests[i] # Get the request at that index
+        if request['x'] >= 0 and request['y'] >= 0: # If the request is not the first move for computer
+            board = make_move(board, request) # Make the request move and get the new board state
+        if i >= len(responses):
+            break
+        response = responses[i] # Get the response at that index
+        if response['x'] >= 0 and response['y'] >= 0: # If the response is not the first move for human
+            board = make_move(board, response) # Make the response move and get the new board state
+    return board # Return the final board state
 
-# 创建游戏对象，设置搜索时间限制为5秒
-game = Game(5)
-# 开始游戏
-game.start()
+# Define a function to play reverse connect four with human
+def play():
+    full_input = json.loads(input()) # Read the full input as json
+    all_requests = full_input["requests"] # Get all requests from the input
+    all_responses = full_input["responses"] # Get all responses from the input
+    board = get_board_from_history(all_requests, all_responses) # Get the board state from the history of requests and responses
+    if is_terminal(board): # If the board state is terminal
+        print_board(board) # Print the board state
+        print('Game over.') # Print game over message
+        return # Return from the function
+    move = mcts(board) # Perform the Monte Carlo tree search and get the best move
+    response = {'response': move} # Create a response with the move
+    print(json.dumps(response)) # Print the response as json
+
+# Call the play function to start the game
+play()
